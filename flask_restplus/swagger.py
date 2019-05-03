@@ -5,7 +5,11 @@ import itertools
 import re
 
 from inspect import isclass, getdoc
-from collections import OrderedDict, Hashable
+from collections import OrderedDict
+try:
+    from collections.abc import Hashable
+except ImportError:
+    from collections import Hashable
 from six import string_types, itervalues, iteritems, iterkeys
 
 from flask import current_app
@@ -128,6 +132,14 @@ def parse_docstring(obj):
     return parsed
 
 
+def is_hidden(resource):
+    '''
+    Determine whether a Resource has been hidden from Swagger documentation
+    i.e. by using Api.doc(False) decorator
+    '''
+    return hasattr(resource, "__apidoc__") and resource.__apidoc__ is False
+
+
 class Swagger(object):
     '''
     A Swagger documentation wrapper for an API instance.
@@ -220,11 +232,18 @@ class Swagger(object):
             tags.append(tag)
             by_name[tag['name']] = tag
         for ns in api.namespaces:
+            # hide namespaces without any Resources
+            if not ns.resources:
+                continue
+            # hide namespaces with all Resources hidden from Swagger documentation
+            resources = (resource for resource, urls, kwargs in ns.resources)
+            if all(is_hidden(r) for r in resources):
+                continue
             if ns.name not in by_name:
                 tags.append({
                     'name': ns.name,
                     'description': ns.description
-                })
+                } if ns.description else {'name': ns.name})
             elif ns.description:
                 by_name[ns.name]['description'] = ns.description
         return tags
@@ -236,8 +255,11 @@ class Swagger(object):
         doc['name'] = resource.__name__
         params = merge(self.expected_params(doc), doc.get('params', OrderedDict()))
         params = merge(params, extract_path_params(url))
-        doc['params'] = params
-        for method in [m.lower() for m in resource.methods or []]:
+        # Track parameters for late deduplication
+        up_params = {(n, p.get('in', 'query')): p for n, p in params.items()}
+        need_to_go_down = set()
+        methods = [m.lower() for m in resource.methods or []]
+        for method in methods:
             method_doc = doc.get(method, OrderedDict())
             method_impl = getattr(resource, method)
             if hasattr(method_impl, 'im_func'):
@@ -251,7 +273,29 @@ class Swagger(object):
                 method_params = merge(method_params, method_doc.get('params', {}))
                 inherited_params = OrderedDict((k, v) for k, v in iteritems(params) if k in method_params)
                 method_doc['params'] = merge(inherited_params, method_params)
+                for name, param in method_doc['params'].items():
+                    key = (name, param.get('in', 'query'))
+                    if key in up_params:
+                        need_to_go_down.add(key)
             doc[method] = method_doc
+        # Deduplicate parameters
+        # For each couple (name, in), if a method overrides it,
+        # we need to move the paramter down to each method
+        if need_to_go_down:
+            for method in methods:
+                method_doc = doc.get(method)
+                if not method_doc:
+                    continue
+                params = {
+                    (n, p.get('in', 'query')): p
+                    for n, p in (method_doc['params'] or {}).items()
+                }
+                for key in need_to_go_down:
+                    if key not in params:
+                        method_doc['params'][key[0]] = up_params[key]
+        doc['params'] = OrderedDict(
+            (k[0], p) for k, p in up_params.items() if k not in need_to_go_down
+        )
         return doc
 
     def expected_params(self, doc):
@@ -336,8 +380,10 @@ class Swagger(object):
         if doc.get('deprecated') or doc[method].get('deprecated'):
             operation['deprecated'] = True
         # Handle form exceptions:
-        if operation['parameters'] and any(p['in'] == 'formData' for p in operation['parameters']):
-            if any(p['type'] == 'file' for p in operation['parameters']):
+        doc_params = list(doc.get('params', {}).values())
+        all_params = doc_params + (operation['parameters'] or [])
+        if all_params and any(p['in'] == 'formData' for p in all_params):
+            if any(p['type'] == 'file' for p in all_params):
                 operation['consumes'] = ['multipart/form-data']
             else:
                 operation['consumes'] = ['application/x-www-form-urlencoded', 'multipart/form-data']

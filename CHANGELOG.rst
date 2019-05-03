@@ -6,6 +6,36 @@ Changelog
 Current
 -------
 
+- Add new `Wildcard` fields (:pr:`255`)
+- Fix ABC deprecation warnings (:pr:`580`)
+- Fix `@api.expect(..., validate=False)` decorators for an :class:`Api` where `validate=True` is set on the constructor (:issue:`609`, :pr:`610`)
+- Ensure `basePath` is always a path
+- Hide Namespaces with all hidden Resources from Swagger documentation
+
+0.12.1 (2018-09-28)
+-------------------
+
+- Fix missing changelog inprevious release
+- Ensure definitions with both `$ref` and description (or other property) output is valid (using `allOf`)
+- Added initial specifications schemas and validation support
+- Ensure empty enums are not serialized (to have a valid specification)
+
+0.12.0 (2018-09-27)
+-------------------
+
+- Fix Namespace decorators (:issue:`475`)
+- Do not serialize empty tags descriptions
+- Ensure `consumes` is properly set when using form parameters on classes
+- Ensure parameters are not duplicated (:issue:`164`, :issue:`196`, :issue:`234`)
+- Publish sources distribution (:issue:`500`, :issue:`515`)
+- Fix late resources registeration (:issue:`483`)
+- Don't include namespaces without resources to the SWAGGER documentation (:issue:`470`)
+- Add support for checkbox validation input + consistent behavior between inputs and fields. (:issue:`461`)
+- Fix missing `enum34` dependency (:issue:`444`)
+
+0.11.0 (2018-05-16)
+-------------------
+
 - Add authorizations parsing to namespace (:issue:`403`)
 - Add vendor extensions support (:issue:`97`)
 - :class:`~reqparse.RequestParser` arguments now support the ``split`` action
@@ -21,6 +51,10 @@ Current
 - Fix masks not working correctly with Python 2.7 (:issue:`217`)
 - Fixed typos in doc/scaling
 - Add docs for `allow_null` and :class:`~fields.Nested`
+- Add Namespace.payload
+- **Breaking**: everything is unordered by default because ordering has a serious impact on performances:
+    - :class:`Api` and :class:`Namespace` now accept an optionnal ``ordered`` parameter
+    - :func:`marshal_with` and :func:`marshal` now accept an optionnal ``ordered`` parameter
 
 Breaking changes
 ~~~~~~~~~~~~~~~~

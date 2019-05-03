@@ -307,3 +307,33 @@ class APITest(object):
         unified_auth = copy.copy(a1)
         unified_auth.update(a2)
         assert api.__schema__["securityDefinitions"] == unified_auth
+
+    def test_non_ordered_namespace(self, app):
+        api = restplus.Api(app)
+        ns = api.namespace('ns', 'Test namespace')
+
+        assert not ns.ordered
+
+    def test_ordered_namespace(self, app):
+        api = restplus.Api(app, ordered=True)
+        ns = api.namespace('ns', 'Test namespace')
+
+        assert ns.ordered
+
+    def test_decorators(self, app, mocker):
+        decorator1 = mocker.Mock(return_value=lambda x: x)
+        decorator2 = mocker.Mock(return_value=lambda x: x)
+        decorator3 = mocker.Mock(return_value=lambda x: x)
+
+        class TestResource(restplus.Resource):
+            method_decorators = []
+
+        api = restplus.Api(decorators=[decorator1])
+        ns = api.namespace('test_ns', decorators=[decorator2, decorator3])
+
+        ns.add_resource(TestResource, '/test', endpoint='test')
+        api.init_app(app)
+
+        assert decorator1.called is True
+        assert decorator2.called is True
+        assert decorator3.called is True

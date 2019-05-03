@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 
 import difflib
 import inspect
+from itertools import chain
 import logging
 import operator
 import re
@@ -74,6 +75,7 @@ class Api(object):
     :param str default_label: The default namespace label (used in Swagger documentation)
     :param str default_mediatype: The default media type to return
     :param bool validate: Whether or not the API should perform input payload validation.
+    :param bool ordered: Whether or not preserve order models and marshalling.
     :param str doc: The documentation path. If set to a false value, documentation is disabled.
                 (Default to '/')
     :param list decorators: Decorators to attach to every resource
@@ -92,7 +94,7 @@ class Api(object):
             contact=None, contact_url=None, contact_email=None,
             authorizations=None, security=None, doc='/', default_id=default_id,
             default='default', default_label='Default namespace', validate=None,
-            tags=None, prefix='',
+            tags=None, prefix='', ordered=False,
             default_mediatype='application/json', decorators=None,
             catch_all_404s=False, serve_challenge_on_401=False, format_checker=None,
             **kwargs):
@@ -108,6 +110,7 @@ class Api(object):
         self.authorizations = authorizations
         self.security = security
         self.default_id = default_id
+        self.ordered = ordered
         self._validate = validate
         self._doc = doc
         self._doc_view = None
@@ -166,6 +169,7 @@ class Api(object):
         :param str license_url: The license page URL (used in Swagger documentation)
 
         '''
+        self.app = app
         self.title = kwargs.get('title', self.title)
         self.description = kwargs.get('description', self.description)
         self.terms_url = kwargs.get('terms_url', self.terms_url)
@@ -198,8 +202,8 @@ class Api(object):
         app.handle_user_exception = partial(self.error_router, app.handle_user_exception)
 
         if len(self.resources) > 0:
-            for resource, urls, kwargs in self.resources:
-                self._register_view(app, resource, *urls, **kwargs)
+            for resource, namespace, urls, kwargs in self.resources:
+                self._register_view(app, resource, namespace, *urls, **kwargs)
 
         self._register_apidoc(app)
         self._validate = self._validate if self._validate is not None else app.config.get('RESTPLUS_VALIDATE', False)
@@ -236,6 +240,7 @@ class Api(object):
             self._register_view(
                 app_or_blueprint,
                 SwaggerView,
+                self.default_namespace,
                 '/swagger.json',
                 endpoint=endpoint,
                 resource_class_args=(self, )
@@ -256,12 +261,12 @@ class Api(object):
         self.endpoints.add(endpoint)
 
         if self.app is not None:
-            self._register_view(self.app, resource, *urls, **kwargs)
+            self._register_view(self.app, resource, namespace, *urls, **kwargs)
         else:
-            self.resources.append((resource, urls, kwargs))
+            self.resources.append((resource, namespace, urls, kwargs))
         return endpoint
 
-    def _register_view(self, app, resource, *urls, **kwargs):
+    def _register_view(self, app, resource, namespace, *urls, **kwargs):
         endpoint = kwargs.pop('endpoint', None) or camel_to_dash(resource.__name__)
         resource_class_args = kwargs.pop('resource_class_args', ())
         resource_class_kwargs = kwargs.pop('resource_class_kwargs', {})
@@ -270,17 +275,20 @@ class Api(object):
         if endpoint in getattr(app, 'view_functions', {}):
             previous_view_class = app.view_functions[endpoint].__dict__['view_class']
 
-            # if you override the endpoint with a different class, avoid the collision by raising an exception
+            # if you override the endpoint with a different class, avoid the
+            # collision by raising an exception
             if previous_view_class != resource:
-                msg = 'This endpoint (%s) is already set to the class %s.' % (endpoint, previous_view_class.__name__)
-                raise ValueError(msg)
+                msg = 'This endpoint (%s) is already set to the class %s.'
+                raise ValueError(msg % (endpoint, previous_view_class.__name__))
 
         resource.mediatypes = self.mediatypes_method()  # Hacky
         resource.endpoint = endpoint
+
         resource_func = self.output(resource.as_view(endpoint, self, *resource_class_args,
             **resource_class_kwargs))
 
-        for decorator in self.decorators:
+        # Apply Namespace and Api decorators to a resource
+        for decorator in chain(namespace.decorators, self.decorators):
             resource_func = decorator(resource_func)
 
         for url in urls:
@@ -425,6 +433,7 @@ class Api(object):
 
         :returns Namespace: a new namespace instance
         '''
+        kwargs['ordered'] = kwargs.get('ordered', self.ordered)
         ns = Namespace(*args, **kwargs)
         self.add_namespace(ns)
         return ns
@@ -460,7 +469,7 @@ class Api(object):
 
         :rtype: str
         '''
-        return url_for(self.endpoint('root'))
+        return url_for(self.endpoint('root'), _external=False)
 
     @cached_property
     def __schema__(self):
@@ -582,6 +591,13 @@ class Api(object):
 
         '''
         got_request_exception.send(current_app._get_current_object(), exception=e)
+
+        if not isinstance(e, HTTPException) and current_app.propagate_exceptions:
+            exc_type, exc_value, tb = sys.exc_info()
+            if exc_value is e:
+                raise
+            else:
+                raise e
 
         include_message_in_response = current_app.config.get("ERROR_INCLUDE_MESSAGE", True)
         default_data = {}
